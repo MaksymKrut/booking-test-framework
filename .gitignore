@@ -1,0 +1,10 @@
+target/
+allure-results/
+allure-report/
+test-results/
+traces/
+*.log
+.DS_Store
+.claude/
+.vscode/*
+!.vscode/settings.json
