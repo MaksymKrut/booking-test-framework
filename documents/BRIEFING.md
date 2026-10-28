@@ -180,7 +180,7 @@ Nothing beyond this list without an explicit request. Candidates for "Further wo
 4. `BookDialog`, `NavTabs`, `Toast`, `BookingsPage` → `BookShiftE2ETest` → `BookShiftNegativeE2ETest`. (PNG + trace in Allure already confirmed by the step 3 forced failure.)
 5. `BookingConcurrencyTest`.
 6. Bug tests (`@Tag("bugs")`, expected red) → `BUGS.md` entry for each bug confirmed by its failing test (repro, expected vs actual, test name); candidates that do not reproduce are dropped and reported.
-7. README: fill "What is covered", "Assumptions and known issues"; report screenshot under `docs/`.
+7. README: fill "What is covered", "Bug reports" summary, "Assumptions and known issues"; report screenshot at `documents/ALLURE.png` (README embeds it; replace with a full-run screenshot).
 
 ## 6. Working rules (summary of CLAUDE.md)
 - Propose a short plan; implement only what is approved; show the diff.
