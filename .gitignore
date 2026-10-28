@@ -9,6 +9,7 @@ allure-report/
 # Playwright
 test-results/
 playwright-report/
+.playwright-mcp/
 
 # Logs and JVM crash dumps
 *.log

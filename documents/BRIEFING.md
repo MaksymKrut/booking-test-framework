@@ -50,7 +50,7 @@ application disagrees with this file, the running application wins — note the 
 1. 404 `Courier with id X not found`
 2. 404 `Shift with id X not found`
 3. 409 `Courier is inactive and cannot book shifts`
-4. 409 `Shift has already started` (and cannot be booked)
+4. 409 `Shift has already started and can no longer be booked` (started = `now >= startTime`; a past shift cannot be created, so tests create one a few seconds ahead and wait for IN_PROGRESS)
 5. 409 `Courier has already booked this shift`
 6. 409 `Courier already has a booking that overlaps with this shift` — half-open interval: back-to-back shifts (end == start) are allowed; one minute of overlap is rejected
 7. 409 `Shift is full`
@@ -132,21 +132,21 @@ Package root `com.booking.tests`.
 | Package | Class | Responsibility |
 |---|---|---|
 | `config` | `Config` (interface), `PropertiesConfig` | keys `ui.base.url`, `api.base.url`, `ui.browser`, `ui.headless`, `api.max.response.ms`; precedence `-D` > env var (`UI_BASE_URL`) > `config/<env>.properties` (`-Denv`) > `config/defaults.properties`; `Config.get()` singleton |
-| `api/spec` | `Specs` | `request()` = RequestSpecBuilder: base URI, JSON content type + accept, filters `AllureRestAssured` + `Slf4jLogFilter`; optional bearer from env `API_TOKEN` (seam). `ok()`, `created()`, `status(int)` = ResponseSpecBuilder: status, JSON content type, `expectResponseTime(lessThan(api.max.response.ms), MILLISECONDS)`. Static init registers Jackson mapper with `JavaTimeModule` via `ObjectMapperConfig.jackson2ObjectMapperFactory`, and `LogConfig.blacklistHeader("Authorization")` |
-| `api/spec` | `Slf4jLogFilter` | logger name `http`; INFO `--> METHOD uri` and `<-- status uri (ms)`; DEBUG bodies; never headers |
-| `api/client` | `CourierClient`, `ShiftClient`, `BookingClient` | one method per endpoint returning `Response`; `createOk(...)` convenience returning the record via `Specs.created()`; `Allure.step` inside |
+| `api/spec` | `Specs` | `request()` = RequestSpecBuilder: base URI, JSON content type + accept, filters `AllureRestAssured` + `Slf4jLogFilter`; optional bearer from env `API_TOKEN` (seam). `ok()`, `created()`, `status(int)` = ResponseSpecBuilder: status, JSON content type, `expectResponseTime(lessThan(api.max.response.ms), MILLISECONDS)`. One `RestAssuredConfig` (built once): `ObjectMapperType.JACKSON_2` pinned, `jackson2ObjectMapperFactory` → `Json.mapper()`, `LogConfig.blacklistHeader("Authorization")`; attached to every request spec via `setConfig`, never to the global `RestAssured.config` (no shared mutable state under parallel classes) |
+| `api/spec` | `Slf4jLogFilter` | logger name `http`; INFO `--> METHOD uri` and `<-- status METHOD uri (ms)` (method repeated so interleaved parallel lines stand alone); DEBUG bodies; never headers |
+| `api/client` | `CourierClient`, `ShiftClient`, `BookingClient` | one method per endpoint returning `Response`; setup helpers `createOk(...)` (`Specs.created()`), `ShiftClient.getOk(id)`, `BookingClient.cancelOk(id)` (`Specs.ok()`) returning the record; `Allure.step` inside |
 | `api/model` | records from 1.6 + enums `Zone`, `VehicleType` | |
-| `data` | `CourierBuilder`, `ShiftBuilder` | `aCourier()` defaults: unique name, email `qa-<uuid8>@example.com`, phone `+1-555-<4 digits>`, random vehicle, active; `.inactive()`, `.vehicle()`, `.name()`. `aShift()` defaults: random zone, start = `2030-01-01T00:00Z` + random days + random hours (unique per call), end = start + 4 h, capacity 2; `.capacity(n)`, `.zone(z)`, `.startingAt(Instant)`, `.durationHours(h)`, `.overlapping(Shift other)`, `.backToBack(Shift other)`, `.inThePast()` |
+| `data` | `CourierBuilder`, `ShiftBuilder` | `aCourier()` defaults: unique name, email `qa-<uuid8>@example.com`, phone `+1-555-<4 digits>`, random vehicle, active; `.inactive()`, `.vehicle()`, `.name()`. `aShift()` defaults: random zone, start = `2030-01-01T00:00Z` + own day per call (atomic counter, random seed per JVM) + random hour 00–11, so default shifts never overlap; end = start + 4 h, capacity 2; `.capacity(n)`, `.zone(z)`, `.startingAt(Instant)`, `.startingIn(Duration)` (for "already started"), `.durationHours(h)`, `.duration(Duration)` (minute boundaries), `.overlapping(Shift other)` (1 min overlap), `.backToBack(Shift other)`, `.inThePast()` |
 | `ui/driver` | `PlaywrightManager` | ThreadLocal `Playwright` and `Browser` per thread; `openPage()` creates context (baseURL from config, tracing started with screenshots+snapshots) + page; `page()`, `context()`, `closePage()`, `closeBrowser()` |
-| `ui/driver` | `UiTestExtension` | JUnit 5: `BeforeEachCallback` opens page; `AfterTestExecutionCallback` attaches full-page PNG + trace zip to Allure when the test failed (runs before `@AfterEach`, page still alive); `AfterEachCallback` closes page; `AfterAllCallback` closes browser |
+| `ui/driver` | `UiTestExtension` | JUnit 5: `BeforeEachCallback` opens page; `AfterTestExecutionCallback` attaches full-page PNG + trace zip (also kept in `target/traces/`) to Allure when the test failed (runs before `@AfterEach`, page still alive; Allure 3 API `Allure.attachment(name, type, stream, AttachmentOptions.withFileExtension(ext))`; evidence errors logged, never thrown); `AfterEachCallback` closes page; `AfterAllCallback` closes browser |
 | `ui/pages` | `BasePage` | holds `Page`; `toast()` = `page.locator("#notification")` |
-| `ui/pages` | `ShiftsPage` | `open()` navigates `/` and clicks `#tab-shifts`; `row(id)`; `bookShift(id)` → `BookDialog`; `bookedCell(id)` locator; `statusBadge(id)` locator; `goToBookings()` |
+| `ui/pages` | `ShiftsPage` | `open()` navigates `/` inside `page.waitForResponse(GET /api/shifts)` — no tab click (Shifts is the default section and every tab click re-fetches and re-renders the table); `table()`, `row(id)`, `zoneCell(id)`; `bookShift(id)` → `BookDialog`; `bookedCell(id)` locator; `statusBadge(id)` locator; `goToBookings()` |
 | `ui/pages` | `BookingsPage` | `open()`; `rowFor(bookingId)`; `filterByCourier(name)`; `cancel(bookingId)` with dialog accept |
 | `ui/components` | `BookDialog` | waits for `#book-dialog[open]`; `selectCourier(courierId)` (by value); `confirm()` wraps the click in `page.waitForResponse` on POST `/api/bookings`; returns `ShiftsPage`; `isOpen()` |
 | `ui/components` | `NavTabs`, `Toast` | tab clicks; toast `expectSuccess(text)` / `expectError(text)` using `assertThat(locator).hasText` |
-| `util` | `Waits` | `until(BooleanSupplier, Duration timeout, Duration poll, String description)` — fluent poller for non-DOM conditions |
-| `util` | `Json` | shared `ObjectMapper` with `JavaTimeModule`, unknown properties ignored |
-| test | `BaseApiTest` | `@Tag("api")`; fields `couriers`, `shifts`, `bookings` clients |
+| `util` | `Waits` | `until(BooleanSupplier, Duration timeout, Duration poll, String description)` — fluent poller for non-DOM conditions, inside an Allure step; timeout → `IllegalStateException` |
+| `util` | `Json` | shared `ObjectMapper` (`Json.mapper()`) with `JavaTimeModule`, ISO instants, unknown properties ignored, nulls kept |
+| test | `BaseApiTest` | `@Tag("api")`; fields `couriers`, `shifts`, `bookings` clients; `BOOKING_SCHEMA` constant |
 | test | `BaseUiTest` | `@ExtendWith(UiTestExtension.class) @Tag("ui")`; `page` bound in `@BeforeEach`; same three clients for seeding |
 
 Resources already in place: `config/defaults.properties`, `junit-platform.properties` (classes concurrent, parallelism 2), `allure.properties`, `logback.xml`. Add `src/test/resources/schemas/booking.schema.json` (draft-04; required `id, courierId, shiftId, status, shiftStart, shiftEnd, createdAt`; `status` enum CONFIRMED|CANCELLED).
@@ -161,11 +161,13 @@ API — `src/test/java/com/booking/tests/api/`
 5. `BookingConcurrencyTest` — capacity-1 shift, 10 distinct couriers, 10 parallel POSTs via `ExecutorService` → exactly one 201, nine 409 "Shift is full". Second case: one courier, two overlapping shifts, parallel → record outcome (expected by spec: one 409; if both 201 → bug for BUGS.md).
 
 UI — `src/test/java/com/booking/tests/ui/`
-6. `ShiftsSmokeTest` — page opens, `#shifts-table` visible. (first smoke)
+6. `ShiftsSmokeTest` — page opens, `#shifts-table` visible; an API-seeded shift shows its row with zone, `"0 / N"` and OPEN badge. (first smoke)
 7. `BookShiftE2ETest` — API-seeded courier + shift (cap 2) → UI book → toast "Shift booked" → cell "1 / 2" → Bookings tab row CONFIRMED → API cross-check.
 8. `BookShiftNegativeE2ETest` — courier already booked on shift A (via API); UI book overlapping shift B → error toast "Courier already has a booking that overlaps with this shift", dialog still open.
 
-Tags: every class `api` or `ui`; `MetaApiTest`, `ShiftsSmokeTest`, `BookShiftE2ETest` also `smoke`.
+Bugs — every confirmed bug (section 7) gets a covering test tagged `bugs` that asserts the correct (spec) behaviour. **`bugs` tests are expected to FAIL** while the bug exists; green means fixed (or a wrong test). Never weaken an assertion to make one pass. API bugs in `KnownBugsApiTest`, UI bugs in `KnownBugsUiTest`, the concurrent-overlap bug as case 2 of `BookingConcurrencyTest`; DisplayName starts with `BUG-0n`.
+
+Tags: every class `api` or `ui`; `MetaApiTest`, `ShiftsSmokeTest`, `BookShiftE2ETest` also `smoke`; bug tests also `bugs` (`-Dgroups=bugs` runs only them, `-DexcludedGroups=bugs` excludes them).
 
 Nothing beyond this list without an explicit request. Candidates for "Further work" only.
 
@@ -175,7 +177,7 @@ Nothing beyond this list without an explicit request. Candidates for "Further wo
 3. `PlaywrightManager` → `UiTestExtension` → `BasePage` → `ShiftsPage` → `ShiftsSmokeTest` headed once (`-Dui.headless=false`), then headless.
 4. `BookDialog`, `NavTabs`, `Toast`, `BookingsPage` → `BookShiftE2ETest` → force one failure to confirm PNG + trace appear in Allure → `BookShiftNegativeE2ETest`.
 5. `BookingConcurrencyTest`.
-6. `BUGS.md` entries as findings are confirmed by a running test or a reproducible request.
+6. Bug tests (`@Tag("bugs")`, expected red) → `BUGS.md` entry for each bug confirmed by its failing test (repro, expected vs actual, test name); candidates that do not reproduce are dropped and reported.
 7. README: fill "What is covered", "Assumptions and known issues"; report screenshot under `docs/`.
 
 ## 6. Working rules (summary of CLAUDE.md)

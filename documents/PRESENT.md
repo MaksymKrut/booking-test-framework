@@ -6,6 +6,8 @@
 - Every commit by hand, with my own message — the history is mine.
 - A test counts only after I have seen it fail for the right reason: each rule test mutated once.
 - Rejected suggestions stay on the record: a brittle selector, a wrong expected status.
+- Playwright MCP: the model reads the live DOM before proposing locators; same review rules apply.
+- Docs in `documents/` are re-checked after every build step, so the spec never drifts from the code.
 
 ## Opening (1 min)
 - Java framework: REST Assured for the API, Playwright for the UI, JUnit 5 running in parallel, Allure reporting, SLF4J logging.
@@ -30,10 +32,14 @@
 ## How tests stay independent
 - Every test creates its own courier and shift through the API; no seed rows, no order dependency; parallel from the first commit.
 
+## Bugs are tests
+- Each BUGS.md entry has a `@Tag("bugs")` test asserting the correct behaviour — red by design while the bug exists, green the day it is fixed.
+- `mvn test -Dgroups=bugs` replays every known bug on demand; `-DexcludedGroups=bugs` keeps the regular suite green.
+
 ## Extending the framework (options)
 - New page: extend BasePage, locators by id/role, actions return the next page, no assertions.
 - New endpoint: one method in the resource client using Specs.request(); record in api/model if the payload is new.
-- New test: extend BaseApiTest / BaseUiTest; data from builders; tag api/ui, smoke/regression.
+- New test: extend BaseApiTest / BaseUiTest; data from builders; tag api/ui, plus smoke or bugs.
 - Negative case: raw client call, Specs.status(409), assert ApiError.message().
 - Data-driven: @ParameterizedTest with @CsvSource over a builder override.
 
@@ -41,6 +47,5 @@
 - CI pipeline, Testcontainers for the application, OpenAPI contract validation, k6 on POST /bookings, event assertions, data-testid request to the developers.
 
 ## Working with AI — next step
-- Playwright MCP: the model reads the live DOM before proposing locators; same review rules apply.
 - Test candidates generated from the OpenAPI document, human-verified before they count.
 - Flaky-test triage over Allure history; AI review gate on pull requests.
