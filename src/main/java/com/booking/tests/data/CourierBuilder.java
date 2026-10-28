@@ -42,6 +42,12 @@ public final class CourierBuilder {
         return this;
     }
 
+    /** Overrides the valid default, e.g. to probe the phone rule ({@code ^\+?[0-9][0-9\- ]{6,19}$}). */
+    public CourierBuilder phone(String phone) {
+        this.phone = phone;
+        return this;
+    }
+
     public CourierBuilder vehicle(VehicleType vehicle) {
         this.vehicle = vehicle;
         return this;

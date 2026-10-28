@@ -68,6 +68,15 @@ public final class ShiftBuilder {
         return this;
     }
 
+    /**
+     * Moves the start by {@code seconds} (the duration is kept). Default starts are on the full hour; the API
+     * accepts any second, the UI's {@code datetime-local} inputs only minutes, so this exposes that mismatch.
+     */
+    public ShiftBuilder plusSeconds(long seconds) {
+        this.start = start.plusSeconds(seconds);
+        return this;
+    }
+
     /** Server accepts 1–12 h inclusive. */
     public ShiftBuilder durationHours(long hours) {
         return duration(Duration.ofHours(hours));

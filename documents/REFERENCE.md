@@ -46,7 +46,7 @@
 | Git + GitHub | History and submission | `.gitignore` excludes `target/`, `allure-results/`, logs, traces, `.claude/`, `.vscode/*` except `settings.json` | Commits by hand with descriptive messages; branch `master`; `git log --oneline` before every push |
 | VS Code | Editor | Extension Pack for Java, XML (Red Hat), Container Tools | Test Runner for Java runs JUnit from the gutter; Container Tools shows the application's containers |
 | Claude Code | AI pair under human-in-the-loop rules | `CLAUDE.md` (rules, layout, conventions), `.mcp.json` (Playwright MCP server) | Plan first, implement after approval, every diff reviewed; no git operations by the model; MCP lets the model inspect the running UI before proposing locators |
-| `documents/` | Context for the model and for presentation | `ASSIGNMENT.md` (the brief), `BRIEFING.md` (application facts, framework spec, build plan), `PRESENT.md` (presentation notes), this file | Read at session start; checked for stale statements after every build step |
+| `documents/` | Context for the model and for presentation | `ASSIGNMENT.md` (the brief), `BRIEFING.md` (application facts, framework spec, build plan), `BUGS.md` (bug reports, each covered by a `bugs` test), `PRESENT.md` (presentation notes), this file | Read at session start; checked for stale statements after every build step |
 
 ## Key commands (cheat sheet)
 

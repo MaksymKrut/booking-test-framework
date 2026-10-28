@@ -2,6 +2,7 @@ package com.booking.tests.ui.pages;
 
 import com.booking.tests.ui.components.BookDialog;
 import com.booking.tests.ui.components.NavTabs;
+import com.booking.tests.ui.components.ShiftDialog;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import io.qameta.allure.Allure;
@@ -40,6 +41,14 @@ public final class ShiftsPage extends BasePage {
             row(shiftId).locator("button[data-action='book']").click();
         });
         return new BookDialog(page);
+    }
+
+    /** Clicks the row's Edit button ({@code disabled} unless OPEN or FULL) and returns the pre-filled dialog. */
+    public ShiftDialog editShift(long shiftId) {
+        Allure.step("Open edit dialog for shift " + shiftId, () -> {
+            row(shiftId).locator("button[data-action='edit']").click();
+        });
+        return new ShiftDialog(page);
     }
 
     public BookingsPage goToBookings() {

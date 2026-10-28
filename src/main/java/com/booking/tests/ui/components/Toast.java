@@ -19,6 +19,14 @@ public final class Toast {
         this.page = page;
     }
 
+    /**
+     * The toast whatever its type. Asserting the expected text on this locator makes a failure print the text
+     * that was actually shown (e.g. the API's error message), not just "element not found".
+     */
+    public Locator message() {
+        return page.locator("#notification");
+    }
+
     public Locator success() {
         return page.locator("#notification.success");
     }

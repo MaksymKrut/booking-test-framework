@@ -18,7 +18,8 @@
 2. `mvn test -Dgroups=api` — API suite.
 3. `mvn test -Dgroups=ui -Dui.headless=false` — one journey, visible browser.
 4. `mvn allure:serve` — steps, request/response bodies, screenshot and trace on a failure.
-5. README: how to use, requirements map, tooling decisions, BUGS.md.
+5. `mvn test -Dgroups=bugs -DexcludedGroups=` — 10 known bugs replayed, all red by design.
+6. README: how to use, requirements map, tooling decisions; `documents/BUGS.md`.
 
 ## Why these tools
 - Maven — the exercise's own command; the application is Maven too.
@@ -32,7 +33,10 @@
 ## How tests stay independent
 - Every test creates its own courier and shift through the API; no seed rows, no order dependency; parallel from the first commit.
 
-## Bugs are tests
+## Bugs are tests (10 found, all confirmed — `documents/BUGS.md`)
+- Sources: the application README is the spec where it states a rule (BUG-01, 02, 03, 06); elsewhere the expectation is written down as an assumption with its reasoning — a product decision to confirm, not hidden.
+- Highlight: BUG-01, a race — one courier books overlapping shifts when requests arrive together (5/5 reproduced); root cause and fix in the report.
+- One bug is our own finding from the HTTP logs: `createdAt` differs between create response and read (BUG-09).
 - Each BUGS.md entry has a `@Tag("bugs")` test asserting the correct behaviour — red by design while the bug exists, green the day it is fixed.
 - Excluded by default (pom property), so `mvn clean test` stays green; `mvn test -Dgroups=bugs -DexcludedGroups=` replays every known bug on demand.
 
