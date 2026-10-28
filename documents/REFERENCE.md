@@ -6,7 +6,7 @@
 |---|---|---|---|
 | Java 21 (Temurin 25 installed) | Language/runtime | `pom.xml` `<maven.compiler.release>21</maven.compiler.release>`; `.vscode/settings.json` points at Temurin 25 | Code targets 21 (records, `var`, switch expressions, text blocks); any JDK ≥ 21 runs it |
 | Maven 3.9+ | Build, dependency download, test entry point | `pom.xml`; libraries cached in `~/.m2/repository` | `mvn clean test` · `mvn test -Dgroups=api` · `mvn test -Dtest=ClassName` · `mvn -q dependency:resolve` |
-| maven-surefire-plugin 3.6.1 | Maven's built-in test runner — runs when you type `mvn test` | pinned in `pom.xml`; passes `allure.results.directory` as a system property | Nothing to call directly; honours JUnit tags via `-Dgroups` / `-DexcludedGroups`; `-Dsurefire.rerunFailingTestsCount=1` reruns failures |
+| maven-surefire-plugin 3.6.1 | Maven's built-in test runner — runs when you type `mvn test` | pinned in `pom.xml`; passes `allure.results.directory` as a system property; pom property `excludedGroups=bugs` skips bug tests by default | Nothing to call directly; honours JUnit tags via `-Dgroups` / `-DexcludedGroups`; `-Dsurefire.rerunFailingTestsCount=1` reruns failures |
 | maven-compiler-plugin 3.16.0 | Compiles with `release 21`, keeps parameter names | `pom.xml`, `<parameters>true</parameters>` | Nothing to call |
 | exec-maven-plugin 3.6.4 | Runs a Java main from Maven | `pom.xml` | Browser install (optional: Playwright downloads Chromium on the first run by itself; use this when that download is blocked): `mvn exec:java -e -D exec.mainClass=com.microsoft.playwright.CLI -D exec.args="install chromium"` |
 | Docker Desktop + Compose v2 | Runs the application under test | the application's own `docker-compose.yml` (sibling folder) | `docker compose up --build -d` · `docker compose ps` · reset `docker compose down -v` · health `curl localhost:8080/actuator/health` |
@@ -57,8 +57,9 @@ mvn clean test
 mvn test -Dgroups=api
 mvn test -Dgroups=ui -Dui.headless=false
 mvn test -Dtest=BookShiftE2ETest
-mvn test -Dgroups=bugs                       # only bug tests (expected red)
-mvn test -DexcludedGroups=bugs               # everything except bug tests
+mvn clean test                               # default: everything except bug tests (pom excludes "bugs")
+mvn test -Dgroups=bugs -DexcludedGroups=     # only bug tests (expected red)
+mvn test -DexcludedGroups=                   # everything, bug tests included
 mvn test -Djunit.jupiter.execution.parallel.enabled=false
 mvn allure:serve
 mvn allure:report

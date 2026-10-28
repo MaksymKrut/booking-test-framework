@@ -159,7 +159,7 @@ API — `src/test/java/com/booking/tests/api/`
 2. `CreateBookingApiTest` — 201 + schema + fields; `@ParameterizedTest` rule matrix in precedence order (404 courier, 404 shift, 409 inactive, 409 started, 409 duplicate, 409 overlap, 409 full, 400 nulls); back-to-back allowed; re-book after cancel.
 3. `CancelBookingApiTest` — 200 CANCELLED with `cancelledAt`; 409 already cancelled; slot freed (`availableSlots` +1).
 4. `CreateShiftApiTest` — `@CsvSource` boundaries: duration 59 m / 60 m / 12 h / 12 h 01 m; capacity 0 / 1 / 50 / 51; end == start; start in the past.
-5. `BookingConcurrencyTest` — capacity-1 shift, 10 distinct couriers, 10 parallel POSTs via `ExecutorService` → exactly one 201, nine 409 "Shift is full". Second case: one courier, two overlapping shifts, parallel → record outcome (expected by spec: one 409; if both 201 → bug for BUGS.md).
+5. `BookingConcurrencyTest` — capacity-1 shift, 10 distinct couriers, 10 parallel POSTs via `ExecutorService` → exactly one 201, nine 409 "Shift is full". Two latches (ready + go) release all requests at once; concurrent responses checked by status/message only (no response-time ceiling under contention). Second case `@Tag("bugs")` BUG-01: one courier, 5 identical-time shifts in parallel → spec: one 201, four 409, one CONFIRMED (5 instead of 2 to make the race reproducible; expected red).
 
 UI — `src/test/java/com/booking/tests/ui/`
 6. `ShiftsSmokeTest` — page opens, `#shifts-table` visible; an API-seeded shift shows its row with zone, `"0 / N"` and OPEN badge. (first smoke)
@@ -168,7 +168,7 @@ UI — `src/test/java/com/booking/tests/ui/`
 
 Bugs — every confirmed bug (section 7) gets a covering test tagged `bugs` that asserts the correct (spec) behaviour. **`bugs` tests are expected to FAIL** while the bug exists; green means fixed (or a wrong test). Never weaken an assertion to make one pass. API bugs in `KnownBugsApiTest`, UI bugs in `KnownBugsUiTest`, the concurrent-overlap bug as case 2 of `BookingConcurrencyTest`; DisplayName starts with `BUG-0n`.
 
-Tags: every class `api` or `ui`; `MetaApiTest`, `ShiftsSmokeTest`, `BookShiftE2ETest` also `smoke`; bug tests also `bugs` (`-Dgroups=bugs` runs only them, `-DexcludedGroups=bugs` excludes them).
+Tags: every class `api` or `ui`; `MetaApiTest`, `ShiftsSmokeTest`, `BookShiftE2ETest` also `smoke`; bug tests also `bugs`. The pom property `<excludedGroups>bugs</excludedGroups>` excludes them from a plain `mvn clean test`; `-Dgroups=bugs -DexcludedGroups=` runs only them; `-DexcludedGroups=` runs everything.
 
 Nothing beyond this list without an explicit request. Candidates for "Further work" only.
 

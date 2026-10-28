@@ -34,7 +34,7 @@
 
 ## Bugs are tests
 - Each BUGS.md entry has a `@Tag("bugs")` test asserting the correct behaviour — red by design while the bug exists, green the day it is fixed.
-- `mvn test -Dgroups=bugs` replays every known bug on demand; `-DexcludedGroups=bugs` keeps the regular suite green.
+- Excluded by default (pom property), so `mvn clean test` stays green; `mvn test -Dgroups=bugs -DexcludedGroups=` replays every known bug on demand.
 
 ## Extending the framework (options)
 - New page: extend BasePage, locators by id/role, actions return the next page, no assertions.
