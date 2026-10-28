@@ -1,10 +1,38 @@
+# Maven
 target/
+
+# Allure (CLI downloaded by allure-maven; results and report are build output)
+.allure/
 allure-results/
 allure-report/
+
+# Playwright
 test-results/
-traces/
+playwright-report/
+
+# Logs and JVM crash dumps
 *.log
-.DS_Store
-.claude/
+logs/
+hs_err_pid*
+replay_pid*
+
+# Secrets and local environment
+.env
+.env.*
+
+# IDE
 .vscode/*
 !.vscode/settings.json
+.idea/
+*.iml
+.settings/
+.project
+.classpath
+.factorypath
+
+# AI assistant local state (CLAUDE.md and .mcp.json are committed on purpose)
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
