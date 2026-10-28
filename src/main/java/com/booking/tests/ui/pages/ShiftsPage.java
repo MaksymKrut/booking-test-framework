@@ -1,5 +1,7 @@
 package com.booking.tests.ui.pages;
 
+import com.booking.tests.ui.components.BookDialog;
+import com.booking.tests.ui.components.NavTabs;
 import com.microsoft.playwright.Locator;
 import com.microsoft.playwright.Page;
 import io.qameta.allure.Allure;
@@ -26,10 +28,22 @@ public final class ShiftsPage extends BasePage {
     public ShiftsPage open() {
         Allure.step("Open Shifts page", () -> {
             page.waitForResponse(
-                    response -> "GET".equals(response.request().method()) && response.url().contains("/api/shifts"),
+                    response -> "GET".equals(response.request().method()) && response.url().contains("/api/shifts?"),
                     () -> page.navigate("/"));
         });
         return this;
+    }
+
+    /** Clicks the row's Book button ({@code disabled} unless the shift is OPEN) and returns the opened dialog. */
+    public BookDialog bookShift(long shiftId) {
+        Allure.step("Open book dialog for shift " + shiftId, () -> {
+            row(shiftId).locator("button[data-action='book']").click();
+        });
+        return new BookDialog(page);
+    }
+
+    public BookingsPage goToBookings() {
+        return new NavTabs(page).bookings();
     }
 
     public Locator table() {

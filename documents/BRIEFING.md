@@ -139,11 +139,12 @@ Package root `com.booking.tests`.
 | `data` | `CourierBuilder`, `ShiftBuilder` | `aCourier()` defaults: unique name, email `qa-<uuid8>@example.com`, phone `+1-555-<4 digits>`, random vehicle, active; `.inactive()`, `.vehicle()`, `.name()`. `aShift()` defaults: random zone, start = `2030-01-01T00:00Z` + own day per call (atomic counter, random seed per JVM) + random hour 00–11, so default shifts never overlap; end = start + 4 h, capacity 2; `.capacity(n)`, `.zone(z)`, `.startingAt(Instant)`, `.startingIn(Duration)` (for "already started"), `.durationHours(h)`, `.duration(Duration)` (minute boundaries), `.overlapping(Shift other)` (1 min overlap), `.backToBack(Shift other)`, `.inThePast()` |
 | `ui/driver` | `PlaywrightManager` | ThreadLocal `Playwright` and `Browser` per thread; `openPage()` creates context (baseURL from config, tracing started with screenshots+snapshots) + page; `page()`, `context()`, `closePage()`, `closeBrowser()` |
 | `ui/driver` | `UiTestExtension` | JUnit 5: `BeforeEachCallback` opens page; `AfterTestExecutionCallback` attaches full-page PNG + trace zip (also kept in `target/traces/`) to Allure when the test failed (runs before `@AfterEach`, page still alive; Allure 3 API `Allure.attachment(name, type, stream, AttachmentOptions.withFileExtension(ext))`; evidence errors logged, never thrown); `AfterEachCallback` closes page; `AfterAllCallback` closes browser |
-| `ui/pages` | `BasePage` | holds `Page`; `toast()` = `page.locator("#notification")` |
-| `ui/pages` | `ShiftsPage` | `open()` navigates `/` inside `page.waitForResponse(GET /api/shifts)` — no tab click (Shifts is the default section and every tab click re-fetches and re-renders the table); `table()`, `row(id)`, `zoneCell(id)`; `bookShift(id)` → `BookDialog`; `bookedCell(id)` locator; `statusBadge(id)` locator; `goToBookings()` |
-| `ui/pages` | `BookingsPage` | `open()`; `rowFor(bookingId)`; `filterByCourier(name)`; `cancel(bookingId)` with dialog accept |
-| `ui/components` | `BookDialog` | waits for `#book-dialog[open]`; `selectCourier(courierId)` (by value); `confirm()` wraps the click in `page.waitForResponse` on POST `/api/bookings`; returns `ShiftsPage`; `isOpen()` |
-| `ui/components` | `NavTabs`, `Toast` | tab clicks; toast `expectSuccess(text)` / `expectError(text)` using `assertThat(locator).hasText` |
+| `ui/pages` | `BasePage` | holds `Page`; `toast()` → `Toast` component |
+| `ui/pages` | `ShiftsPage` | `open()` navigates `/` inside `page.waitForResponse(GET /api/shifts)` — no tab click (Shifts is the default section and every tab click re-fetches and re-renders the table); `table()`, `row(id)`, `zoneCell(id)`; `bookShift(id)` (clicks `button[data-action='book']`) → `BookDialog`; `bookedCell(id)` locator; `statusBadge(id)` locator; `goToBookings()` |
+| `ui/pages` | `BookingsPage` | reached via `NavTabs.bookings()`; `row(bookingId)`, `courierCell(id)`, `statusBadge(id)`. No `cancel`/`filterByCourier` until a test needs them (rows are found by the booking id from the API cross-check) |
+| `ui/components` | `BookDialog` | constructor waits for `#book-dialog[open]` (opens only after its two fetches, so open = populated); `selectCourier(courierId)` by option value; `confirm()` wraps the click in `page.waitForResponse` on POST `/api/bookings`, returns `ShiftsPage`; `root()` locator for retrying `isVisible()`/`isHidden()` (no boolean `isOpen()`) |
+| `ui/components` | `NavTabs` | `shifts()`, `bookings()`: click inside `waitForResponse` on the tab's list fetch (`/api/shifts?`, `/api/bookings?`), return the page |
+| `ui/components` | `Toast` | locators `success()` = `#notification.success`, `error()` = `#notification.error`; no assertions (CLAUDE.md) — tests use `assertThat(toast.success()).hasText(...)` |
 | `util` | `Waits` | `until(BooleanSupplier, Duration timeout, Duration poll, String description)` — fluent poller for non-DOM conditions, inside an Allure step; timeout → `IllegalStateException` |
 | `util` | `Json` | shared `ObjectMapper` (`Json.mapper()`) with `JavaTimeModule`, ISO instants, unknown properties ignored, nulls kept |
 | test | `BaseApiTest` | `@Tag("api")`; fields `couriers`, `shifts`, `bookings` clients; `BOOKING_SCHEMA` constant |
@@ -162,8 +163,8 @@ API — `src/test/java/com/booking/tests/api/`
 
 UI — `src/test/java/com/booking/tests/ui/`
 6. `ShiftsSmokeTest` — page opens, `#shifts-table` visible; an API-seeded shift shows its row with zone, `"0 / N"` and OPEN badge. (first smoke)
-7. `BookShiftE2ETest` — API-seeded courier + shift (cap 2) → UI book → toast "Shift booked" → cell "1 / 2" → Bookings tab row CONFIRMED → API cross-check.
-8. `BookShiftNegativeE2ETest` — courier already booked on shift A (via API); UI book overlapping shift B → error toast "Courier already has a booking that overlaps with this shift", dialog still open.
+7. `BookShiftE2ETest` — API-seeded courier + shift (cap 2) → UI book → toast "Shift booked" → cell "1 / 2" → API cross-check (exactly one CONFIRMED; gives the booking id) → Bookings tab row for that id: badge CONFIRMED, courier name.
+8. `BookShiftNegativeE2ETest` — courier already booked on shift A (via API); UI book overlapping shift B → error toast "Courier already has a booking that overlaps with this shift", dialog still open, B still "0 / 2", API shows no booking on B.
 
 Bugs — every confirmed bug (section 7) gets a covering test tagged `bugs` that asserts the correct (spec) behaviour. **`bugs` tests are expected to FAIL** while the bug exists; green means fixed (or a wrong test). Never weaken an assertion to make one pass. API bugs in `KnownBugsApiTest`, UI bugs in `KnownBugsUiTest`, the concurrent-overlap bug as case 2 of `BookingConcurrencyTest`; DisplayName starts with `BUG-0n`.
 
@@ -175,7 +176,7 @@ Nothing beyond this list without an explicit request. Candidates for "Further wo
 1. `Config` + `PropertiesConfig` → `Json` → `Specs` + `Slf4jLogFilter` → `MetaApiTest` → `mvn clean test` green → `mvn allure:serve` shows the request/response attachment.
 2. Records + enums → clients → builders → `CreateBookingApiTest` happy path → mutation check (flip 201→200, see it fail) → rule matrix → `CancelBookingApiTest` → `CreateShiftApiTest`.
 3. `PlaywrightManager` → `UiTestExtension` → `BasePage` → `ShiftsPage` → `ShiftsSmokeTest` headed once (`-Dui.headless=false`), then headless.
-4. `BookDialog`, `NavTabs`, `Toast`, `BookingsPage` → `BookShiftE2ETest` → force one failure to confirm PNG + trace appear in Allure → `BookShiftNegativeE2ETest`.
+4. `BookDialog`, `NavTabs`, `Toast`, `BookingsPage` → `BookShiftE2ETest` → `BookShiftNegativeE2ETest`. (PNG + trace in Allure already confirmed by the step 3 forced failure.)
 5. `BookingConcurrencyTest`.
 6. Bug tests (`@Tag("bugs")`, expected red) → `BUGS.md` entry for each bug confirmed by its failing test (repro, expected vs actual, test name); candidates that do not reproduce are dropped and reported.
 7. README: fill "What is covered", "Assumptions and known issues"; report screenshot under `docs/`.

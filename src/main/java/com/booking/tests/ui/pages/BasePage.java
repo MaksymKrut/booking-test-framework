@@ -1,6 +1,6 @@
 package com.booking.tests.ui.pages;
 
-import com.microsoft.playwright.Locator;
+import com.booking.tests.ui.components.Toast;
 import com.microsoft.playwright.Page;
 
 /**
@@ -15,11 +15,8 @@ public abstract class BasePage {
         this.page = page;
     }
 
-    /**
-     * The single toast element ({@code role="alert"}). The app reuses it for every message, replaces its text,
-     * and hides it again after 4 s, so assert on it immediately after the action that triggers it.
-     */
-    public Locator toast() {
-        return page.locator("#notification");
+    /** The app-wide toast; available on every page because the app has a single one. */
+    public Toast toast() {
+        return new Toast(page);
     }
 }
