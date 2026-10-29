@@ -1,0 +1,5 @@
+target/
+.allure/
+.git/
+.playwright-mcp/
+documents/
