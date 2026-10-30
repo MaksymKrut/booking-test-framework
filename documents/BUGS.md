@@ -6,10 +6,13 @@ Bugs and inconsistencies found while building this suite, written up as bug repo
   **red while the bug exists** and turns green when it is fixed. Red is the expected result — never weaken an
   assertion to make one pass.
 - Bug tests are excluded from the default run (`pom.xml` property `excludedGroups=bugs`). Replay all of them:
-  `mvn clean test -Dgroups=bugs -DexcludedGroups=` → 10 tests, 10 failures, each with the message quoted below.
+  `mvn clean test -Dgroups=bugs -DexcludedGroups=` → 13 tests, 13 failures, each with the message quoted below
+  (BUG-01 and BUG-12 are races: a lucky run can pass, which is itself a sign of the race).
 - **Basis** says where the expected behaviour comes from: **README** = the application README states the rule;
+  **PR** = the contract in the description of application PR #1 (booking reschedule);
   **Assumed** = no written rule, the expectation is ours and the reasoning is given (a product decision to confirm).
-- Environment: application commit `1ba4281` via `docker compose up -d`; confirmed 2026-10-28.
+- Environment: BUG-01…10 on application commit `1ba4281` via `docker compose up -d`, confirmed 2026-10-28.
+  BUG-11…13 on PR #1, branch `feature/booking-reschedule`, commit `8a5ab94`, reproduced with curl 2026-10-29.
 
 | ID | Title | Area | Severity | Basis | Test |
 |---|---|---|---|---|---|
@@ -23,6 +26,9 @@ Bugs and inconsistencies found while building this suite, written up as bug repo
 | [BUG-08](#bug-08) | Unknown courier: 404 on one bookings endpoint, 200 `[]` on the other | API · bookings | Low | Assumed | `KnownBugsApiTest.unknownCourierIsNotFoundOnBothEndpoints` |
 | [BUG-09](#bug-09) | `createdAt` in create responses differs from the stored value | API · all resources | Low | Assumed | `KnownBugsApiTest.createdAtIsStableBetweenCreateAndRead` |
 | [BUG-10](#bug-10) | Invalid enum in a request body is not reported as a field error | API · errors | Low | Assumed | `KnownBugsApiTest.invalidVehicleTypeIsReportedAsFieldError` |
+| [BUG-11](#bug-11) | Reschedule rejected as "overlap" when the target overlaps only the booking being moved | API · reschedule | Medium | PR | `KnownBugsApiTest.rescheduleExcludesTheMovedBookingFromOverlapCheck` |
+| [BUG-12](#bug-12) | Parallel reschedules let one courier end up with overlapping bookings | API · reschedule | High | PR | `BookingConcurrencyTest.overlapCheckHoldsUnderParallelReschedules` |
+| [BUG-13](#bug-13) | API reschedules a booking whose shift has already started | API · reschedule | Medium | Assumed | `KnownBugsApiTest.bookingOnStartedShiftCannotBeRescheduled` |
 
 ---
 
@@ -141,8 +147,49 @@ Sequential requests are rejected correctly (covered by `CreateBookingApiTest`), 
 **Root cause:** Jackson fails to deserialise the enum before bean validation runs; `GlobalExceptionHandler.java:58–60` maps every `HttpMessageNotReadableException` to one generic message.
 **Suggested fix:** inspect the cause (`InvalidFormatException` → field path) and return it in `fieldErrors`.
 
+<a id="bug-11"></a>
+## BUG-11 — Reschedule rejected as "overlap" when the target overlaps only the booking being moved
+**Severity:** Medium (the common "move it an hour later" case fails; the workaround cancel + rebook loses the booking's identity, which is the point of the feature) · **Area:** API `POST /bookings/{id}/reschedule` · **Basis:** PR #1 business rules and README: "The booking being moved is **excluded** from the overlap check".
+
+**Steps**
+1. Create a courier, a shift `09:00–13:00` and book it.
+2. Create a shift `10:00–14:00` (overlaps only the booked one) and reschedule the booking to it:
+   ```bash
+   curl -s -X POST http://localhost:8080/api/bookings/B/reschedule -H 'Content-Type: application/json' -d '{"shiftId":T}'
+   ```
+
+**Expected:** `200`, the booking now on the target shift.
+**Actual:** `409 "Courier already has a booking that overlaps with this shift"`. Reproduced with curl on 2026-10-29.
+**Root cause:** `BookingService.java:110` calls the same `courierHasOverlappingBooking(courierId, start, end)` as booking creation; the query (`BookingRepository.java:31–37`) counts every CONFIRMED booking of the courier, including the one being moved.
+**Suggested fix:** add the booking id to the query (`and b.id <> :excludeBookingId`) for the reschedule path.
+
+<a id="bug-12"></a>
+## BUG-12 — Parallel reschedules let one courier end up with overlapping bookings
+**Severity:** High (same consequence as BUG-01: a courier double-booked in time) · **Area:** API `POST /bookings/{id}/reschedule` · **Basis:** PR #1 business rules ("no other confirmed booking that overlaps the target shift"); the PR's locking comment promises that "concurrent reschedules cannot race".
+
+**Steps**
+1. Create a courier with several bookings on shifts on different days.
+2. Create the same number of target shifts with identical times; send one reschedule per booking to its own target **at the same time**.
+
+**Expected:** exactly one `200`, every other `409 "Courier already has a booking that overlaps with this shift"`.
+**Actual:** every reschedule returns `200`; the courier ends with all bookings on overlapping shifts. Reproduced with curl on 2026-10-29 (4 of 4 parallel moves succeeded).
+**Root cause:** same as BUG-01. `reschedule` locks the booking row (`BookingService.java:92`) and the target shift row (`:94`) but not the courier, so moves of *different* bookings of one courier hold different locks and all pass the overlap read (`:110`) before any of them commits.
+**Suggested fix:** the BUG-01 fix covers both paths: lock the courier row before the overlap check, or a database exclusion constraint on courier + time range for CONFIRMED bookings.
+
+<a id="bug-13"></a>
+## BUG-13 — API reschedules a booking whose shift has already started
+**Severity:** Medium (a booking of a running or finished shift can be moved away, rewriting who worked when; API and UI disagree) · **Area:** API `POST /bookings/{id}/reschedule` · **Basis:** Assumed — the PR's UI contract enables Reschedule only when the booking's shift starts in the future, and cancel refuses a started shift ("Shift has already started; booking can no longer be cancelled"); the API should enforce what the UI promises.
+
+**Steps:** via API create a shift starting a few seconds from now and book it; wait until `GET /shifts/{id}` reports `IN_PROGRESS`; reschedule the booking to any future shift.
+**Expected:** `409` (message to be defined; the PR has none for this case).
+**Actual:** `200`, the booking moved off the in-progress shift. Reproduced with curl on 2026-10-29.
+**Root cause:** `reschedule` checks only that the *target* has not started (`BookingService.java:106`); there is no check on the booking's current shift, unlike `cancel` (`:131`). The UI check (`app.js:296`) is client-side only.
+**Suggested fix:** reject when `booking.getShift().hasStarted(now)`, with its own message, and add it to the PR's error table.
+
 ---
 
 ## Considered, not filed
 - All candidates reproduced; none were dropped.
+- Reschedule onto a shift the courier already holds in another booking answers "Courier already has a booking that overlaps with this shift", not "already booked this shift". Matches the PR's error table, so not a defect.
+- Reschedule picker (PR #1): an option clicked within the 250 ms search debounce is selected, but the pending filter then runs on the selected label and re-opens the list with "No shifts match" (`app.js:460`; `selectShiftOption`, `app.js:427`, does not clear the timer). Cosmetic, needs a sub-250 ms click; `RescheduleDialog.search` waits for the filter so tests are deterministic.
 - `GET :3000/actuator/health` returns `200` with `index.html` (noted in the briefing, not covered by a test): nginx SPA fallback for unknown paths, not an API defect — use `:8080/actuator/health`.

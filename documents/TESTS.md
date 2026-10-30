@@ -4,9 +4,12 @@ Every test in the framework, grouped by class, with what it does and what it pro
 Each test seeds its own couriers, shifts and bookings through the API, so none depends on seed
 rows, other tests or execution order.
 
-**In numbers:** 27 test methods, 40 executions (parameterized cases counted separately).
-The default run executes 30; the 10 known-bug tests (tag `bugs`) are excluded and expected to fail
+**In numbers:** 41 test methods, 62 executions (parameterized cases counted separately).
+The default run executes 49; the 13 known-bug tests (tag `bugs`) are excluded and expected to fail
 until their bug is fixed (see [BUGS.md](BUGS.md)).
+
+**Reschedule tests** (marked *PR #1*) need the application on branch `feature/booking-reschedule`
+(commit `8a5ab94`); against `main` the endpoint does not exist and they fail with 404.
 
 **Tags:** `api` / `ui` by layer, `smoke` for the quick health check, `bugs` for known-bug tests.
 
@@ -85,9 +88,43 @@ Cancelling an already cancelled booking returns 409 "Booking is already cancelle
 On a capacity-2 shift, `availableSlots` is 1 while booked and 2 after cancelling, with `bookedCount`
 back to 0. The "while booked" value is asserted too, so a test that never consumed the slot cannot pass.
 
-### POST /bookings under concurrency — `BookingConcurrencyTest`
+### POST /bookings/{id}/reschedule — `RescheduleBookingApiTest` (PR #1)
 
-Data is seeded first; then all booking requests are released at the same instant, each from its own
+Expected behaviour is the contract in the PR description: the same booking moves to the target
+shift, keeps its id and `createdAt`, frees the old slot and takes the new one.
+
+**200: same booking moved to the target, createdAt kept, old slot freed, new slot taken, no new row**
+Books a shift, then reschedules the booking to another. The response matches the booking schema,
+keeps the id, courier and status `CONFIRMED`, and carries the target's id, zone, start and end.
+`createdAt` equals the value read back before the move (not the create response, which differs
+because of BUG-09). The old shift is back to 0 booked, the target has 1, and the courier still has
+exactly one booking.
+
+**Rejects a reschedule that breaks a rule (PR contract order)** (9 cases)
+One case per row of the PR's error table, each breaking only its own rule. Every case checks status,
+the literal message, `path` `/api/bookings/{id}/reschedule`, and that `fieldErrors` is absent for
+business rules.
+- Unknown booking → 404 "Booking with id … not found"
+- Unknown target shift → 404 "Shift with id … not found"
+- Cancelled booking → 409 "Booking is cancelled and cannot be rescheduled"
+- Target is the current shift → 409 "Booking is already on this shift"
+- Courier deactivated after booking → 409 "Courier is inactive and cannot book shifts"
+- Target already started → 409 "Shift has already started and can no longer be booked"
+  (created 3 s ahead, the test waits until the server reports it `IN_PROGRESS`)
+- Target overlaps the courier's *other* booking → 409 "Courier already has a booking that overlaps with this shift"
+- Target full → 409 "Shift is full"
+- `shiftId` sent as JSON null → 400 "Validation failed" with `fieldErrors` naming `shiftId`
+
+**200 for a target back-to-back with another booking: end == next start is not an overlap**
+The target starts exactly when the courier's other booking ends; the move succeeds.
+
+**200 when moving back to the original shift: the freed slot can be taken again**
+A booking on a capacity-1 shift is moved away and back. The way back succeeds (it would be "Shift is
+full" if the first move had not freed the slot), the original is `FULL` again and the detour empty.
+
+### Bookings under concurrency — `BookingConcurrencyTest`
+
+Data is seeded first; then all requests are released at the same instant, each from its own
 thread, behind a start gate so no request gets a head start.
 
 **Capacity-1 shift, 10 couriers at once: exactly one 201, nine 409 "Shift is full"**
@@ -98,6 +135,21 @@ full". The shift then shows `bookedCount` 1, `availableSlots` 0 and status `FULL
 One courier books five shifts with identical times in parallel. Correct behaviour is one 201, four 409
 and a single `CONFIRMED` booking for the courier. Today the overlap check is not serialised, so several
 bookings succeed. A lucky run can still pass, which is itself a sign of a race.
+
+**Reschedule: 10 bookings into one capacity-1 shift at once: exactly one 200, nine 409 "Shift is full"** (PR #1)
+Ten couriers each hold a booking on their own shift and all reschedule into the same single slot.
+Exactly one wins; the other nine get 409 "Shift is full" and stay on the shift they were booked on.
+The target ends with `bookedCount` 1 and status `FULL`.
+
+**Reschedule: same booking to two shifts at once: both 200, booking on one target, counts consistent** (PR #1)
+One booking is moved to two non-overlapping shifts in parallel. The requests run one after the other
+on the booking's lock, so both succeed. The booking ends on one of the two targets, the original shift
+is free, and the target counts agree with where the booking actually is.
+
+**BUG-12: one courier, 5 bookings rescheduled at once onto overlapping shifts: only one may succeed** (tag `bugs`, expected to fail, PR #1)
+A courier's five bookings on separate days are moved at the same moment onto five shifts with
+identical times. Correct behaviour is one 200 and four 409. Today the overlap check is not serialised
+per courier, so all moves succeed (same cause as BUG-01).
 
 ### Known bugs (API) — `KnownBugsApiTest` (tag `bugs`, all expected to fail)
 
@@ -131,6 +183,16 @@ Today create responses carry nanoseconds, while reads carry what Postgres stored
 Creates a courier with vehicle type `HELICOPTER`. Expected: 400 "Validation failed" with a
 `vehicleType` field error.
 
+**BUG-11: a booking can be rescheduled onto a shift that overlaps only itself** (PR #1)
+A booking is moved to a shift starting one minute before its current shift ends. The only overlap is
+with the booking being moved, which the PR excludes from the check. Expected: 200; today 409
+"Courier already has a booking that overlaps with this shift".
+
+**BUG-13: a booking whose shift has started cannot be rescheduled** (PR #1, expectation assumed)
+A shift starting in 3 s is booked, and the test waits until the server reports it `IN_PROGRESS`.
+Rescheduling the booking to a future shift is expected to be 409, like cancel and like the UI, which
+disables the button; today the API moves it (200).
+
 ---
 
 ## UI tests
@@ -162,6 +224,37 @@ and a `CONFIRMED` badge.
 The same journey for a courier who already holds an overlapping shift. The UI shows the API's message
 "Courier already has a booking that overlaps with this shift", keeps the dialog open so another courier
 can be picked, and the shift still shows `0 / 2`. The API confirms no booking was stored.
+
+### Reschedule a booking — `RescheduleBookingE2ETest` (PR #1)
+
+**Reschedules via the shift picker: success toast, row shows the new shift, same booking stored**
+On the Bookings tab the dispatcher clicks Reschedule, searches the picker for the target's `#id`,
+picks it and confirms. The UI shows "Booking rescheduled", and the row shows the new `#shiftId`, its
+zone and `CONFIRMED`. The API confirms the same booking is now on the target and the courier still
+has one booking.
+
+**Overlap with another booking: error toast with the API reason, dialog stays open, booking not moved**
+The target overlaps the courier's other booking. The UI shows "Courier already has a booking that
+overlaps with this shift", keeps the dialog open, and the row still shows the current shift; the API
+confirms the booking did not move.
+
+### Reschedule picker — `ReschedulePickerUiTest` (PR #1)
+
+The picker lists every upcoming shift in the database, so options are always addressed by shift id,
+never by position.
+
+**Reschedule is enabled for a confirmed future booking and disabled for a cancelled one**
+Two bookings of one courier, one cancelled through the API; the row buttons reflect that.
+
+**Picker leaves out the current shift and shows a full shift as disabled and not selectable**
+The summary names the current shift, which is not offered as an option. A full shift is offered,
+marked disabled and labelled "Full"; clicking it anyway selects nothing and "Reschedule" stays
+disabled.
+
+**Keyboard: ArrowDown + Enter selects the active option; Escape closes the list but not the dialog**
+After a search, ArrowDown makes an option active and Enter selects that same option: it is marked
+selected, its label fills the input, the list collapses and "Reschedule" is enabled. Reopening the
+list and pressing Escape collapses it while the dialog stays open.
 
 ### Known bugs (UI) — `KnownBugsUiTest` (tag `bugs`, all expected to fail)
 

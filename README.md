@@ -8,8 +8,9 @@ run by JUnit 5 in parallel, reported by Allure, logged through SLF4J. Built for 
 Quality Engineer technical exercise, with AI assistance under a human-in-the-loop workflow
 (see below).
 
-**At a glance:** 30 tests green by default (26 API, 4 UI) · 10 known bugs found, each written
+**At a glance:** 49 tests green by default (40 API, 9 UI) · 13 known bugs found, each written
 up in [`documents/BUGS.md`](documents/BUGS.md) and replayable as a red-by-design test.
+Booking reschedule tests target application PR #1 (`feature/booking-reschedule`, commit `8a5ab94`).
 
 ## How to use
 
@@ -128,7 +129,7 @@ bodies at DEBUG level; headers are never logged.
 
 ## What is covered
 
-**API** — `src/test/java/com/booking/tests/api/` (26 tests)
+**API** — `src/test/java/com/booking/tests/api/` (40 tests)
 
 | Class | Covers |
 |---|---|
@@ -136,23 +137,27 @@ bodies at DEBUG level; headers are never logged.
 | `CreateBookingApiTest` | Happy path: 201, JSON schema, every echoed field, slot taken. Rule matrix (`@EnumSource`) in the server's precedence order: 404 courier, 404 shift, 409 inactive, 409 started, 409 duplicate, 409 overlap, 409 full, 400 nulls with `fieldErrors`. Back-to-back shift allowed; re-book after cancel allowed |
 | `CancelBookingApiTest` | Cancel → 200 CANCELLED with `cancelledAt`, schema; second cancel → 409; slot freed (`availableSlots` back up) |
 | `CreateShiftApiTest` | Both sides of every limit: duration 59 min / 1 h / 12 h / 12 h 01 min, capacity 0 / 1 / 50 / 51, end == start, start in the past |
-| `BookingConcurrencyTest` | Capacity-1 shift, 10 couriers booking at the same instant → exactly one 201, nine 409 "Shift is full" |
+| `RescheduleBookingApiTest` | Reschedule (PR #1): 200 with the same id and `createdAt`, target data echoed, old slot freed, new slot taken, no new row, schema. Rule matrix in the PR's order: 404 booking, 404 shift, 409 cancelled, same shift, inactive, started, overlap with another booking, full, 400 null `shiftId`. Back-to-back target allowed; moving back to a capacity-1 original reuses the freed slot |
+| `BookingConcurrencyTest` | Capacity-1 shift, 10 couriers booking at the same instant → exactly one 201, nine 409 "Shift is full". Same for 10 parallel reschedules into one capacity-1 shift (losers stay on their shift); one booking rescheduled to two shifts at once ends on exactly one, counts consistent |
 
-**UI** — `src/test/java/com/booking/tests/ui/` (4 tests)
+**UI** — `src/test/java/com/booking/tests/ui/` (9 tests)
 
 | Class | Covers |
 |---|---|
 | `ShiftsSmokeTest` | Page loads; a shift seeded through the API is rendered with zone, `0 / N`, OPEN badge (smoke) |
 | `BookShiftE2ETest` | Critical journey: book a shift in the UI → success toast → `1 / 2` → API shows exactly one CONFIRMED booking → Bookings tab lists it (smoke) |
 | `BookShiftNegativeE2ETest` | Overlapping booking rejected: API reason shown in the error toast, dialog stays open, nothing stored |
+| `RescheduleBookingE2ETest` | Reschedule through the searchable picker → "Booking rescheduled" → row shows new shift and zone → API: same booking moved, no new row. Overlap with another booking rejected: error toast, dialog open, booking not moved |
+| `ReschedulePickerUiTest` | Reschedule enabled for confirmed, disabled for cancelled; picker leaves out the current shift, shows a full shift disabled and not selectable; ArrowDown + Enter selects, Escape closes the list but not the dialog |
 
-**Known bugs** — 10 tests tagged `bugs`, excluded by default (see below).
+**Known bugs** — 13 tests tagged `bugs`, excluded by default (see below).
 
 Every test was seen failing for the right reason once (mutation check) before it counted.
 
 ## Bug reports
 
-Ten bugs, all confirmed by a failing test on 2026-10-28. Full reports — steps, expected vs
+Thirteen bugs: BUG-01…10 confirmed by a failing test on 2026-10-28, BUG-11…13 (reschedule,
+PR #1) reproduced on 2026-10-29. Full reports — steps, expected vs
 actual, root cause in the application source, suggested fix — in
 [`documents/BUGS.md`](documents/BUGS.md).
 
@@ -168,11 +173,14 @@ actual, root cause in the application source, suggested fix — in
 | BUG-08 | Unknown courier: 404 on one bookings endpoint, 200 `[]` on the other | Low |
 | BUG-09 | `createdAt` in create responses differs from the stored value | Low |
 | BUG-10 | Invalid enum in a request body is not reported as a field error | Low |
+| BUG-11 | Reschedule rejected as "overlap" when the target overlaps only the booking being moved | Medium |
+| BUG-12 | Parallel reschedules let one courier end up with overlapping bookings (race, same cause as BUG-01) | High |
+| BUG-13 | API reschedules a booking whose shift has already started | Medium |
 
 **How bugs are handled.** Each bug has a test that asserts the *correct* behaviour, so it is
 **red by design** while the bug exists and turns green when it is fixed — a fix is verified by
 the suite, not by memory. They are excluded from the default run so the regular suite stays a
-clean signal; `mvn test -Dgroups=bugs -DexcludedGroups=` replays all ten. Where the
+clean signal; `mvn test -Dgroups=bugs -DexcludedGroups=` replays all thirteen. Where the
 application README states a rule, that is the expected behaviour; where it does not, the
 expectation is ours, written down in the report as an assumption with its reasoning (a product
 decision to confirm, not a hidden opinion).
@@ -315,7 +323,13 @@ Precedence: `-Dkey=value` > environment variable (`UI_BASE_URL`, ...) >
   creates one a few seconds ahead and polls until the server reports IN_PROGRESS. This
   assumes the test host and the application share a clock (both local).
 - BUG-01 is a race: its test fires five requests at the same instant and reproduced the bug
-  5/5, but a lucky run could pass.
+  5/5, but a lucky run could pass. BUG-12 is the same race on the reschedule path.
+- The reschedule tests (`RescheduleBookingApiTest`, the reschedule cases of
+  `BookingConcurrencyTest`, `RescheduleBookingE2ETest`, `ReschedulePickerUiTest`, BUG-11…13)
+  need the application on PR #1 (`git checkout feature/booking-reschedule && docker compose up --build -d`);
+  against `main` the endpoint does not exist and they fail with 404.
+- The reschedule picker lists every upcoming shift in the database, so UI tests address
+  options by shift id and never by position.
 - Known-bug tests are red by design and excluded from the default run.
 
 ## Further work

@@ -18,7 +18,7 @@
 2. `mvn test -Dgroups=api` — API suite.
 3. `mvn test -Dgroups=ui -Dui.headless=false` — one journey, visible browser.
 4. `mvn allure:serve` — steps, request/response bodies, screenshot and trace on a failure.
-5. `mvn test -Dgroups=bugs -DexcludedGroups=` — 10 known bugs replayed, all red by design.
+5. `mvn test -Dgroups=bugs -DexcludedGroups=` — 13 known bugs replayed, all red by design (BUG-11…13 from the reschedule PR).
 6. README: how to use, requirements map, tooling decisions; `documents/BUGS.md`.
 
 ## Why these tools

@@ -82,8 +82,8 @@ both from the cache.
      -v "$(pwd)/target:/app/target" \
      booking-tests
    ```
-   Expected result of the default run: `Tests run: 30, Failures: 0`. The 10 known-bug tests are
-   excluded (see [TESTS.md](TESTS.md)).
+   Expected result of the default run: `Tests run: 49, Failures: 0`, with the application on
+   PR #1 (`feature/booking-reschedule`). The 13 known-bug tests are excluded (see [TESTS.md](TESTS.md)).
 
 4. Open the report on the host:
    ```

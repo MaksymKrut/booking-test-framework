@@ -2,6 +2,7 @@ package com.booking.tests.api.client;
 
 import com.booking.tests.api.model.Booking;
 import com.booking.tests.api.model.BookingRequest;
+import com.booking.tests.api.model.RescheduleRequest;
 import com.booking.tests.api.spec.Specs;
 import io.qameta.allure.Allure;
 import io.restassured.response.Response;
@@ -56,6 +57,16 @@ public final class BookingClient {
         return Allure.step("Cancel booking " + id, () -> request().post(BY_ID + "/cancel", id));
     }
 
+    /**
+     * {@code POST /bookings/{id}/reschedule}: 200 with the <em>same</em> booking (id, {@code createdAt}) moved to
+     * {@code body.shiftId()}. A null {@code shiftId} is bean validation and answers 400 before anything else; then a
+     * fixed server-side precedence (404 booking, 404 shift, 409 cancelled, same shift, inactive, started, overlap, full).
+     */
+    public Response reschedule(long id, RescheduleRequest body) {
+        return Allure.step("Reschedule booking " + id + " to shift " + body.shiftId(),
+                () -> request().body(body).post(BY_ID + "/reschedule", id));
+    }
+
     /** Setup helper: book and require 201. */
     public Booking createOk(BookingRequest body) {
         return create(body).then().spec(Specs.created()).extract().as(Booking.class);
@@ -64,6 +75,16 @@ public final class BookingClient {
     /** Setup helper: cancel and require 200. */
     public Booking cancelOk(long id) {
         return cancel(id).then().spec(Specs.ok()).extract().as(Booking.class);
+    }
+
+    /** Setup helper: reschedule and require 200. */
+    public Booking rescheduleOk(long id, long shiftId) {
+        return reschedule(id, new RescheduleRequest(shiftId)).then().spec(Specs.ok()).extract().as(Booking.class);
+    }
+
+    /** Setup helper: read and require 200. */
+    public Booking getOk(long id) {
+        return get(id).then().spec(Specs.ok()).extract().as(Booking.class);
     }
 
     private static RequestSpecification request() {

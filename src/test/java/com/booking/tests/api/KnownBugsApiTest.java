@@ -5,15 +5,19 @@ import com.booking.tests.api.model.Booking;
 import com.booking.tests.api.model.BookingRequest;
 import com.booking.tests.api.model.Courier;
 import com.booking.tests.api.model.CourierRequest;
+import com.booking.tests.api.model.RescheduleRequest;
 import com.booking.tests.api.model.Shift;
 import com.booking.tests.api.spec.Specs;
 import com.booking.tests.data.CourierBuilder;
+import com.booking.tests.util.Waits;
 import io.qameta.allure.Allure;
 import io.restassured.http.ContentType;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+
+import java.time.Duration;
 
 import static com.booking.tests.data.CourierBuilder.aCourier;
 import static com.booking.tests.data.ShiftBuilder.aShift;
@@ -124,6 +128,41 @@ class KnownBugsApiTest extends BaseApiTest {
         Response response = couriers.create(invalid);
 
         assertFieldError(response, "vehicleType");
+    }
+
+    @Test
+    @DisplayName("BUG-11: a booking can be rescheduled onto a shift that overlaps only itself (PR #1: the moved booking is excluded)")
+    void rescheduleExcludesTheMovedBookingFromOverlapCheck() {
+        Courier courier = couriers.createOk(aCourier().build());
+        Shift current = shifts.createOk(aShift().build());
+        Booking booking = bookings.createOk(new BookingRequest(courier.id(), current.id()));
+        // Starts 1 min before the current shift ends. Default shifts never overlap, so the only booking this
+        // target overlaps is the one being moved, which the contract says must not count.
+        Shift target = shifts.createOk(aShift().overlapping(current).build());
+
+        Booking moved = bookings.reschedule(booking.id(), new RescheduleRequest(target.id()))
+                .then().spec(Specs.ok())
+                .extract().as(Booking.class);
+
+        assertEquals(target.id(), moved.shiftId(), "shiftId");
+    }
+
+    @Test
+    @DisplayName("BUG-13: a booking whose shift has started cannot be rescheduled (expectation assumed: same as cancel)")
+    void bookingOnStartedShiftCannotBeRescheduled() {
+        // Book a shift that starts in 3 s (booking is still allowed), then wait until the server reports it started.
+        Courier courier = couriers.createOk(aCourier().build());
+        Shift started = shifts.createOk(aShift().startingIn(Duration.ofSeconds(3)).build());
+        Booking booking = bookings.createOk(new BookingRequest(courier.id(), started.id()));
+        Waits.until(() -> "IN_PROGRESS".equals(shifts.getOk(started.id()).status()),
+                Duration.ofSeconds(15), Duration.ofMillis(500), "shift " + started.id() + " is IN_PROGRESS");
+        Shift target = shifts.createOk(aShift().build());
+
+        Response response = bookings.reschedule(booking.id(), new RescheduleRequest(target.id()));
+
+        // Status only: the PR defines no message for this case. The UI already disables Reschedule here, and
+        // cancel refuses the same booking ("Shift has already started; booking can no longer be cancelled").
+        response.then().spec(Specs.status(409));
     }
 
     /** 400 "Validation failed" whose {@code fieldErrors} names {@code field}. */

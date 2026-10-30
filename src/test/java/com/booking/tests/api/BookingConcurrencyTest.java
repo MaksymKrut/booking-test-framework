@@ -3,17 +3,20 @@ package com.booking.tests.api;
 import com.booking.tests.api.model.Booking;
 import com.booking.tests.api.model.BookingRequest;
 import com.booking.tests.api.model.Courier;
+import com.booking.tests.api.model.RescheduleRequest;
 import com.booking.tests.api.model.Shift;
 import com.booking.tests.api.spec.Specs;
 import io.restassured.response.Response;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.function.Executable;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -30,13 +33,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * {@code POST /bookings} under real contention. Data is seeded sequentially, then all booking requests are
- * released at the same instant from their own threads (see {@link #sendAtOnce}).
+ * {@code POST /bookings} and {@code POST /bookings/{id}/reschedule} under real contention. Data is seeded
+ * sequentially, then all requests are released at the same instant from their own threads (see {@link #sendAllAtOnce}).
  *
  * <p>Concurrent responses are checked by status code and message only, not with {@code Specs}: the 2 s
  * response-time ceiling is a per-call SLA and not what these tests measure under deliberate contention.
  */
-@DisplayName("POST /bookings under concurrency")
+@DisplayName("Bookings under concurrency")
 class BookingConcurrencyTest extends BaseApiTest {
 
     private static final int COURIERS = 10;
@@ -94,21 +97,130 @@ class BookingConcurrencyTest extends BaseApiTest {
                 () -> assertEquals(1, confirmed, "CONFIRMED bookings of the courier"));
     }
 
+    @Test
+    @DisplayName("reschedule: 10 bookings into one capacity-1 shift at once: exactly one 200, nine 409 \"Shift is full\"")
+    void capacityHoldsUnderParallelReschedules() throws Exception {
+        Shift target = shifts.createOk(aShift().capacity(1).build());
+        // One courier per booking, each on its own default shift: no overlap rule can interfere, only capacity.
+        List<Booking> booked = IntStream.range(0, COURIERS)
+                .mapToObj(i -> bookings.createOk(new BookingRequest(
+                        couriers.createOk(aCourier().build()).id(), shifts.createOk(aShift().build()).id())))
+                .toList();
+
+        List<Response> responses = sendAllAtOnce(booked.stream()
+                .map(booking -> (Callable<Response>) () ->
+                        bookings.reschedule(booking.id(), new RescheduleRequest(target.id())))
+                .toList());
+        Shift after = shifts.getOk(target.id());
+
+        // Losers must be untouched: still on the shift they were booked on, not half-moved.
+        List<Executable> losersUntouched = IntStream.range(0, COURIERS)
+                .filter(i -> responses.get(i).statusCode() == 409)
+                .mapToObj(i -> (Executable) () -> assertEquals(booked.get(i).shiftId(),
+                        bookings.getOk(booked.get(i).id()).shiftId(), "booking " + booked.get(i).id() + " shiftId"))
+                .toList();
+        assertAll(
+                () -> assertEquals(1, count(responses, 200), "200 responses"),
+                () -> assertEquals(COURIERS - 1, count(responses, 409), "409 responses"),
+                () -> assertEquals(Set.of("Shift is full"), messages(responses, 409), "409 messages"),
+                () -> assertEquals(1, after.bookedCount(), "target bookedCount"),
+                () -> assertEquals("FULL", after.status(), "target status"),
+                () -> assertAll("losing bookings stay on their shift", losersUntouched));
+    }
+
     /**
-     * Sends each request from its own thread and returns the responses in request order.
+     * The two requests serialise on the booking's row lock, and each move is valid when it is applied (the targets
+     * do not overlap), so both succeed in some order. What must hold is the end state: one booking on exactly one
+     * of the targets, the original slot freed, and the shift counts agreeing with where the booking actually is.
+     */
+    @Test
+    @DisplayName("reschedule: same booking to two shifts at once: both 200, booking on one target, counts consistent")
+    void sameBookingRescheduledTwiceEndsConsistent() throws Exception {
+        Courier courier = couriers.createOk(aCourier().build());
+        Shift origin = shifts.createOk(aShift().build());
+        Shift first = shifts.createOk(aShift().build());
+        Shift second = shifts.createOk(aShift().build());
+        Booking booking = bookings.createOk(new BookingRequest(courier.id(), origin.id()));
+
+        List<Response> responses = sendAllAtOnce(Stream.of(first, second)
+                .map(target -> (Callable<Response>) () ->
+                        bookings.reschedule(booking.id(), new RescheduleRequest(target.id())))
+                .toList());
+
+        Booking after = bookings.getOk(booking.id());
+        long originBooked = shifts.getOk(origin.id()).bookedCount();
+        long firstBooked = shifts.getOk(first.id()).bookedCount();
+        long secondBooked = shifts.getOk(second.id()).bookedCount();
+        assertAll(
+                () -> assertEquals(2, count(responses, 200), "200 responses"),
+                () -> assertTrue(Set.of(first.id(), second.id()).contains(after.shiftId()),
+                        "booking is on one of the targets, was on " + after.shiftId()),
+                () -> assertEquals(0, originBooked, "origin bookedCount"),
+                () -> assertEquals(1, firstBooked + secondBooked, "bookedCount over both targets"),
+                () -> assertEquals(after.shiftId().equals(first.id()) ? 1 : 0, firstBooked,
+                        "first target bookedCount matches where the booking is"));
+    }
+
+    /**
+     * Expected to FAIL while BUG-12 exists: same cause as BUG-01. The reschedule locks the booking and the target
+     * shift, never the courier, so moves of <em>different</em> bookings of one courier hold different locks and
+     * all pass the overlap check before any of them commits. Five bookings on separate days are moved at once onto
+     * five shifts with identical times; only one move may succeed.
+     */
+    @Test
+    @Tag("bugs")
+    @DisplayName("BUG-12: one courier, 5 bookings rescheduled at once onto overlapping shifts: only one may succeed")
+    void overlapCheckHoldsUnderParallelReschedules() throws Exception {
+        Courier courier = couriers.createOk(aCourier().build());
+        List<Booking> booked = IntStream.range(0, OVERLAPPING_SHIFTS)
+                .mapToObj(i -> bookings.createOk(new BookingRequest(courier.id(), shifts.createOk(aShift().build()).id())))
+                .toList();
+        Shift firstTarget = shifts.createOk(aShift().build());
+        List<Shift> targets = Stream.concat(
+                        Stream.of(firstTarget),
+                        IntStream.range(1, OVERLAPPING_SHIFTS)
+                                .mapToObj(i -> shifts.createOk(aShift().startingAt(firstTarget.startTime()).build())))
+                .toList();
+
+        List<Response> responses = sendAllAtOnce(IntStream.range(0, OVERLAPPING_SHIFTS)
+                .mapToObj(i -> (Callable<Response>) () ->
+                        bookings.reschedule(booked.get(i).id(), new RescheduleRequest(targets.get(i).id())))
+                .toList());
+        Set<Long> targetIds = targets.stream().map(Shift::id).collect(Collectors.toSet());
+        long onTargets = Arrays.stream(couriers.bookings(courier.id())
+                        .then().spec(Specs.ok())
+                        .extract().as(Booking[].class))
+                .filter(b -> "CONFIRMED".equals(b.status()) && targetIds.contains(b.shiftId()))
+                .count();
+
+        assertAll(
+                () -> assertEquals(1, count(responses, 200), "200 responses"),
+                () -> assertEquals(OVERLAPPING_SHIFTS - 1, count(responses, 409), "409 responses"),
+                () -> assertEquals(1, onTargets, "CONFIRMED bookings of the courier on the overlapping targets"));
+    }
+
+    /** {@link #sendAllAtOnce} for {@code POST /bookings}. */
+    private List<Response> sendAtOnce(List<BookingRequest> requests) throws Exception {
+        return sendAllAtOnce(requests.stream()
+                .map(request -> (Callable<Response>) () -> bookings.create(request))
+                .toList());
+    }
+
+    /**
+     * Runs each call on its own thread and returns the responses in call order.
      * Two latches make the start simultaneous: every thread counts down {@code ready} and parks on {@code go};
      * only when all are parked does the test open {@code go}, so no request gets a head start from thread
      * creation. The pool is closed (and awaited) by try-with-resources.
      */
-    private List<Response> sendAtOnce(List<BookingRequest> requests) throws Exception {
-        CountDownLatch ready = new CountDownLatch(requests.size());
+    private List<Response> sendAllAtOnce(List<Callable<Response>> calls) throws Exception {
+        CountDownLatch ready = new CountDownLatch(calls.size());
         CountDownLatch go = new CountDownLatch(1);
-        try (ExecutorService pool = Executors.newFixedThreadPool(requests.size())) {
-            List<Future<Response>> futures = requests.stream()
-                    .map(request -> pool.submit(() -> {
+        try (ExecutorService pool = Executors.newFixedThreadPool(calls.size())) {
+            List<Future<Response>> futures = calls.stream()
+                    .map(call -> pool.submit(() -> {
                         ready.countDown();
                         go.await();
-                        return bookings.create(request);
+                        return call.call();
                     }))
                     .toList();
             assertTrue(ready.await(10, TimeUnit.SECONDS), "all threads parked at the start gate");
